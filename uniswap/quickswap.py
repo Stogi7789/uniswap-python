@@ -118,7 +118,7 @@ def _validate_address(a: AddressLike) -> None:
     assert _addr_to_str(a)
 
 
-_netid_to_name = {1: "mainnet", 3: "ropsten", 4: "rinkeby"}
+_netid_to_name = {1: "mainnet", 137: "matic"}
 
 
 class Uniswap:
@@ -171,10 +171,11 @@ class Uniswap:
         if self.version == 1:
             factory_contract_addresses = {
                 "mainnet": "0xc0a47dFe034B400B47bDaD5FecDa2621de6c4d95",
-                "ropsten": "0x9c83dCE8CA20E9aAF9D3efc003b2ea62aBC08351",
-                "rinkeby": "0xf5D915570BC477f9B8D6C0E980aA81757A3AaC36",
-                "kovan": "0xD3E51Ef092B2845f10401a0159B2B96e8B6c3D30",
-                "görli": "0x6Ce570d02D73d4c384b46135E87f8C592A8c86dA",
+                ## "ropsten": "0x9c83dCE8CA20E9aAF9D3efc003b2ea62aBC08351",
+                ## "rinkeby": "0xf5D915570BC477f9B8D6C0E980aA81757A3AaC36",
+                ## "kovan": "0xD3E51Ef092B2845f10401a0159B2B96e8B6c3D30",
+                ## "görli": "0x6Ce570d02D73d4c384b46135E87f8C592A8c86dA",
+                "matic": "0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32",
             }
 
             self.factory_contract = self._load_contract(
@@ -184,15 +185,30 @@ class Uniswap:
         elif self.version == 2:
             # For v2 the address is the same on mainnet, Ropsten, Rinkeby, Görli, and Kovan
             # https://uniswap.org/docs/v2/smart-contracts/factory
-            factory_contract_address_v2 = _str_to_addr(
-                "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
-            )
+            ## factory_contract_address_v2 = _str_to_addr(
+            ##     "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
+            ## )
+            if self.network == "matic":
+                factory_contract_address_v2 = _str_to_addr(
+                    "0x5757371414417b8C6CAad45bAeF941aBc7d3Ab32"
+                )
+                router_address = _str_to_addr(
+                    "0xa5E0829CaCEd8fFDD4De3c43696c57F7D7A678ff"
+                )
+            else:
+                factory_contract_address_v2 = _str_to_addr(
+                    "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f"
+                )
+                router_address = _str_to_addr(
+                    "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+                )
+            self.router_address: AddressLike = router_address
             self.factory_contract = self._load_contract(
                 abi_name="uniswap-v2/factory", address=factory_contract_address_v2,
             )
-            self.router_address: AddressLike = _str_to_addr(
-                "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
-            )
+            ## self.router_address: AddressLike = _str_to_addr(
+            ##     "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D"
+            ## )
             # Documented here: https://uniswap.org/docs/v2/smart-contracts/router02/
             self.router = self._load_contract(
                 abi_name="uniswap-v2/router02", address=self.router_address,
@@ -315,19 +331,32 @@ class Uniswap:
 
     @supports([2])
     def get_token_token_input_price(
-        self, token0: AnyAddress, token1: AnyAddress, qty: int
+        ## self, token0: AnyAddress, token1: AnyAddress, qty: int
+        self,
+        token0: AnyAddress,
+        token1: AnyAddress,
+        qty: int,
+        route: Optional[List[AnyAddress]] = None,
     ) -> int:
         """Public price for token to token trades with an exact input."""
         # If one of the tokens are WETH, delegate to appropriate call.
         # See: https://github.com/shanefontaine/uniswap-python/issues/22
-        if is_same_address(token0, self.get_weth_address()):
-            return int(self.get_eth_token_input_price(token1, qty))
-        elif is_same_address(token1, self.get_weth_address()):
-            return int(self.get_token_eth_input_price(token0, qty))
+        ## if is_same_address(token0, self.get_weth_address()):
+        ##     return int(self.get_eth_token_input_price(token1, qty))
+        ## elif is_same_address(token1, self.get_weth_address()):
+        ##     return int(self.get_token_eth_input_price(token0, qty))
 
-        price: int = self.router.functions.getAmountsOut(
-            qty, [token0, self.get_weth_address(), token1]
-        ).call()[-1]
+        ## price: int = self.router.functions.getAmountsOut(
+        ##     qty, [token0, self.get_weth_address(), token1]
+        ## ).call()[-1]
+        if not route:
+            if is_same_address(token0, self.get_weth_address()):
+                return int(self.get_eth_token_input_price(token1, qty))
+            elif is_same_address(token1, self.get_weth_address()):
+                return int(self.get_token_eth_input_price(token0, qty))
+
+        route = route or [token0, self.get_weth_address(), token1]
+        price: int = self.router.functions.getAmountsOut(qty, route).call()[-1]
         return price
 
     @supports([1, 2])
@@ -337,9 +366,11 @@ class Uniswap:
             ex = self.exchange_contract(token)
             price: Wei = ex.functions.getEthToTokenOutputPrice(qty).call()
         else:
-            price = self.router.functions.getAmountsIn(
-                qty, [self.get_weth_address(), token]
-            ).call()[0]
+            ## price = self.router.functions.getAmountsIn(
+            ##     qty, [self.get_weth_address(), token]
+            ## ).call()[0]
+            route = [self.get_weth_address(), token]
+            price = self.router.functions.getAmountsIn(qty, route).call()[0]
         return price
 
     @supports([1, 2])
@@ -356,20 +387,33 @@ class Uniswap:
 
     @supports([2])
     def get_token_token_output_price(
-        self, token0: AnyAddress, token1: AnyAddress, qty: int
+        ## self, token0: AnyAddress, token1: AnyAddress, qty: int
+        self,
+        token0: AnyAddress,
+        token1: AnyAddress,
+        qty: int,
+        route: Optional[List[AnyAddress]] = None,
     ) -> int:
         """Public price for token to token trades with an exact output."""
         # If one of the tokens are WETH, delegate to appropriate call.
         # See: https://github.com/shanefontaine/uniswap-python/issues/22
         # TODO: Will these equality checks always work? (Address vs ChecksumAddress vs str)
-        if is_same_address(token0, self.get_weth_address()):
-            return int(self.get_eth_token_output_price(token1, qty))
-        elif is_same_address(token1, self.get_weth_address()):
-            return int(self.get_token_eth_output_price(token0, qty))
+        ## if is_same_address(token0, self.get_weth_address()):
+        ##     return int(self.get_eth_token_output_price(token1, qty))
+        ## elif is_same_address(token1, self.get_weth_address()):
+        ##     return int(self.get_token_eth_output_price(token0, qty))
 
-        price: int = self.router.functions.getAmountsIn(
-            qty, [token0, self.get_weth_address(), token1]
-        ).call()[0]
+        ## price: int = self.router.functions.getAmountsIn(
+        ##     qty, [token0, self.get_weth_address(), token1]
+        ## ).call()[0]
+        if not route:
+            if is_same_address(token0, self.get_weth_address()):
+                return int(self.get_eth_token_output_price(token1, qty))
+            elif is_same_address(token1, self.get_weth_address()):
+                return int(self.get_token_eth_output_price(token0, qty))
+
+        route = route or [token0, self.get_weth_address(), token1]
+        price: int = self.router.functions.getAmountsIn(qty, route).call()[0]
         return price
 
     # ------ Wallet balance ------------------------------------------------------------
